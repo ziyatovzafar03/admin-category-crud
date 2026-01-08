@@ -1,0 +1,5 @@
+{
+  "name": "Category Master Pro",
+  "description": "A sophisticated mobile-first category management application featuring advanced CRUD operations, real-time user verification via ChatID, and a fluid modern UI with dark mode support.",
+  "requestFramePermissions": []
+}
