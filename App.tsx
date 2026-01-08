@@ -21,65 +21,93 @@ function App() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingCategory, setEditingCategory] = useState<Category | null>(null);
 
-  // URL'dan chatId olish funksiyasi
-  const getChatIdFromURL = () => {
+  // Helper to get chatId from hash
+  const getChatIdFromURL = useCallback(() => {
     const hash = window.location.hash;
     const match = hash.match(/chatId=([^&]+)/);
     return match ? match[1] : null;
-  };
+  }, []);
 
-  const [chatId, setChatId] = useState<string | null>(getChatIdFromURL());
+  const [chatId, setChatId] = useState<string | null>(() => getChatIdFromURL());
 
-  // Redirect va Hash mantiqi
+  // 1. Navigation & Redirect Logic
   useEffect(() => {
-    const handleNavigation = () => {
+    const checkRedirect = () => {
       const currentChatId = getChatIdFromURL();
       const currentPath = window.location.pathname;
 
-      // Agar noto'g'ri path yoki chatId bo'lmasa redirect
       if (currentPath !== '/' || !currentChatId) {
-        window.location.hash = `chatId=${currentChatId || DEFAULT_CHAT_ID}`;
-        if (currentPath !== '/') window.history.replaceState(null, '', '/');
-      }
-
-      if (currentChatId !== chatId) {
-        setChatId(currentChatId || DEFAULT_CHAT_ID);
+        // Enforce root path and a chatId in hash
+        const targetChatId = currentChatId || DEFAULT_CHAT_ID;
+        window.location.hash = `chatId=${targetChatId}`;
+        if (currentPath !== '/') {
+          window.history.replaceState(null, '', '/');
+        }
+        setChatId(targetChatId);
+      } else if (currentChatId !== chatId) {
+        setChatId(currentChatId);
       }
     };
 
-    handleNavigation();
-    window.addEventListener('hashchange', handleNavigation);
-    return () => window.removeEventListener('hashchange', handleNavigation);
-  }, [chatId]);
+    checkRedirect();
+    window.addEventListener('hashchange', checkRedirect);
+    return () => window.removeEventListener('hashchange', checkRedirect);
+  }, [chatId, getChatIdFromURL]);
 
-  // Ma'lumotlarni yuklash
+  // 2. Data Fetching Logic
   useEffect(() => {
-    const loadData = async () => {
-      if (!chatId) return;
+    let isMounted = true;
+
+    const fetchData = async () => {
+      if (!chatId) {
+        // If we still don't have a chatId after the redirect effect, just stop loading
+        setIsLoading(false);
+        return;
+      }
 
       setIsLoading(true);
+      setIsError(false);
+      setErrorMessage('');
+
       try {
         const userData = await apiService.findUserByChatId(chatId);
+        
+        if (!isMounted) return;
+
         setUser(userData);
         
         if (userData.status === 'CONFIRMED') {
-          const catData = await apiService.getCategories();
-          setCategories(catData);
-          setIsError(false);
+          try {
+            const catData = await apiService.getCategories();
+            if (isMounted) setCategories(catData);
+          } catch (catErr) {
+            console.error('Failed to load categories:', catErr);
+            // We have the user, but couldn't get categories. Show an empty list or specific error.
+            if (isMounted) {
+              setIsError(true);
+              setErrorMessage('Kategoriyalarni yuklashda xatolik yuz berdi.');
+            }
+          }
         } else {
-          setIsError(true);
-          setErrorMessage('Profilingiz tasdiqlanmagan.');
+          if (isMounted) {
+            setIsError(true);
+            setErrorMessage(`Profilingiz holati: ${userData.status}. Kirish uchun CONFIRMED bo'lishi kerak.`);
+          }
         }
-      } catch (err) {
-        console.error('Data loading error:', err);
-        setIsError(true);
-        setErrorMessage('Foydalanuvchi topilmadi yoki server xatosi.');
+      } catch (err: any) {
+        console.error('User verification failed:', err);
+        if (isMounted) {
+          setIsError(true);
+          setErrorMessage(err.message || 'Foydalanuvchini aniqlashda xatolik yuz berdi. Chat ID noto\'g\'ri bo\'lishi mumkin.');
+        }
       } finally {
-        setIsLoading(false);
+        if (isMounted) setIsLoading(false);
       }
     };
 
-    loadData();
+    fetchData();
+
+    return () => { isMounted = false; };
   }, [chatId]);
 
   const toggleTheme = useCallback(() => {
@@ -104,20 +132,20 @@ function App() {
       setIsModalOpen(false);
       setEditingCategory(null);
     } catch (err) {
-      alert('Xatolik yuz berdi.');
+      alert('Amalni bajarishda xatolik yuz berdi.');
     } finally {
       setIsLoading(false);
     }
   };
 
   const handleDelete = async (id: string) => {
-    if (!window.confirm('Oʻchirmoqchimisiz?')) return;
+    if (!window.confirm('Haqiqatdan ham oʻchirmoqchimisiz?')) return;
     setIsLoading(true);
     try {
       await apiService.deleteCategory(id);
       setCategories(prev => prev.filter(c => c.id !== id));
     } catch (err) {
-      alert('Xatolik yuz berdi.');
+      alert('Oʻchirishda xatolik yuz berdi.');
     } finally {
       setIsLoading(false);
     }
@@ -129,21 +157,27 @@ function App() {
       .sort((a, b) => a.orderIndex - b.orderIndex);
   }, [categories, searchQuery]);
 
-  // Render bosqichlari
-  if (isLoading && !user) return <LoadingScreen />;
+  // Main UI States
+  if (isLoading && !user && !isError) return <LoadingScreen />;
   if (isError) return <AccessDenied message={errorMessage} />;
-  if (!user) return <LoadingScreen />; // Faqat xavfsizlik uchun
+  if (!user && !isLoading) return <AccessDenied message="Foydalanuvchi ma'lumotlari topilmadi." />;
 
   return (
     <div className="flex flex-col h-full overflow-hidden bg-slate-50 dark:bg-slate-950">
       <header className="glass sticky top-0 z-50 px-6 py-4 flex items-center justify-between border-b border-slate-200/50 dark:border-slate-800/50">
         <div>
-          <p className="text-[10px] font-bold text-brand-500 uppercase tracking-widest">Panel</p>
-          <h1 className="text-xl font-extrabold">Kategoriyalar</h1>
+          <p className="text-[10px] font-bold text-brand-500 uppercase tracking-widest">Boshqaruv</p>
+          <h1 className="text-xl font-extrabold text-slate-900 dark:text-white">Kategoriyalar</h1>
         </div>
-        <button onClick={toggleTheme} className="p-2.5 rounded-2xl bg-white dark:bg-slate-800 shadow-sm transition-transform active:scale-90">
-          {theme === Theme.LIGHT ? <MoonIcon /> : <SunIcon />}
-        </button>
+        <div className="flex items-center gap-2">
+          <button 
+            onClick={toggleTheme} 
+            className="p-2.5 rounded-2xl bg-white dark:bg-slate-800 shadow-sm border border-slate-100 dark:border-slate-700 transition-transform active:scale-90"
+            aria-label="Toggle Theme"
+          >
+            {theme === Theme.LIGHT ? <MoonIcon /> : <SunIcon />}
+          </button>
+        </div>
       </header>
 
       <div className="px-6 pt-6 pb-2">
@@ -154,7 +188,7 @@ function App() {
             placeholder="Qidiruv..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-12 pr-4 py-4 bg-white dark:bg-slate-900 rounded-3xl outline-none shadow-sm focus:ring-2 focus:ring-brand-500/20"
+            className="w-full pl-12 pr-4 py-4 bg-white dark:bg-slate-900 rounded-3xl outline-none shadow-sm focus:ring-2 focus:ring-brand-500/20 text-slate-800 dark:text-slate-100 transition-all"
           />
         </div>
       </div>
@@ -162,10 +196,15 @@ function App() {
       <main className="flex-1 overflow-y-auto px-6 py-4 space-y-4 pb-32">
         {filteredCategories.length > 0 ? (
           filteredCategories.map(cat => (
-            <CategoryItem key={cat.id} category={cat} onEdit={(c) => { setEditingCategory(c); setIsModalOpen(true); }} onDelete={handleDelete} />
+            <CategoryItem 
+              key={cat.id} 
+              category={cat} 
+              onEdit={(c) => { setEditingCategory(c); setIsModalOpen(true); }} 
+              onDelete={handleDelete} 
+            />
           ))
         ) : (
-          <div className="flex flex-col items-center justify-center py-20 opacity-50">
+          <div className="flex flex-col items-center justify-center py-20 opacity-50 text-slate-500 dark:text-slate-400">
             <SearchIcon className="w-12 h-12 mb-2" />
             <p>Ma'lumot topilmadi</p>
           </div>
@@ -187,9 +226,10 @@ function App() {
         onClose={() => { setIsModalOpen(false); setEditingCategory(null); }}
         onSubmit={handleAddOrEdit}
         initialData={editingCategory}
-        chatId={user.chatId}
+        chatId={user?.chatId || 0}
       />
 
+      {/* Global Action Spinner Overlay */}
       {isLoading && (
         <div className="fixed inset-0 z-[100] bg-white/20 dark:bg-black/20 backdrop-blur-[2px] flex items-center justify-center">
            <div className="w-10 h-10 border-4 border-brand-500 border-t-transparent rounded-full animate-spin" />
