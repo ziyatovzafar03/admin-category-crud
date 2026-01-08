@@ -19,6 +19,9 @@ function App() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingCategory, setEditingCategory] = useState<Category | null>(null);
 
+  // Default fallback chatId
+  const DEFAULT_CHAT_ID = '7882316826';
+
   // Use state for chatId to make it reactive to hash changes
   const [chatId, setChatId] = useState<string | null>(() => {
     const hash = window.location.hash;
@@ -26,22 +29,43 @@ function App() {
     return match ? match[1] : null;
   });
 
-  // Handle Hash Redirect & Listener
+  // Comprehensive Redirection Logic
   useEffect(() => {
-    const handleHashChange = () => {
-      const hash = window.location.hash;
-      const match = hash.match(/chatId=([^&]+)/);
-      setChatId(match ? match[1] : null);
+    const handleNavigationAndRedirect = () => {
+      const currentPath = window.location.pathname;
+      const currentHash = window.location.hash;
+      const chatIdMatch = currentHash.match(/chatId=([^&]+)/);
+
+      // 1. Check if path is not root OR hash is completely missing OR chatId pattern is missing
+      const isInvalidPath = currentPath !== '/';
+      const isMissingChatId = !currentHash || !chatIdMatch;
+
+      if (isInvalidPath || isMissingChatId) {
+        // Redirect any "wrong" URL to root with default chatId
+        // Using replace to avoid polluting browser history with invalid states
+        window.location.replace(`/#chatId=${DEFAULT_CHAT_ID}`);
+      }
+
+      // Update state if chatId changed in hash
+      if (chatIdMatch && chatIdMatch[1] !== chatId) {
+        setChatId(chatIdMatch[1]);
+      }
     };
 
-    // Redirect if accessing root / or missing chatId
-    if (!window.location.hash || !window.location.hash.includes('chatId=')) {
-      window.location.replace('#chatId=123456789');
-    }
+    // Run once on mount
+    handleNavigationAndRedirect();
 
-    window.addEventListener('hashchange', handleHashChange);
-    return () => window.removeEventListener('hashchange', handleHashChange);
-  }, []);
+    // Listen for hash changes
+    window.addEventListener('hashchange', handleNavigationAndRedirect);
+    
+    // In case the history API is used (popstate)
+    window.addEventListener('popstate', handleNavigationAndRedirect);
+
+    return () => {
+      window.removeEventListener('hashchange', handleNavigationAndRedirect);
+      window.removeEventListener('popstate', handleNavigationAndRedirect);
+    };
+  }, [chatId]);
 
   // Theme Toggler
   const toggleTheme = useCallback(() => {
@@ -52,18 +76,10 @@ function App() {
     });
   }, []);
 
-  // Initialization
+  // Initialization & Data Fetching
   useEffect(() => {
     const init = async () => {
-      if (!chatId) {
-        // Only set error if we aren't in the process of redirecting
-        if (window.location.hash.includes('chatId=')) {
-          setIsError(true);
-          setErrorMessage('URL orqali chatId topilmadi. Iltimos, qayta urinib ko\'ring.');
-          setIsLoading(false);
-        }
-        return;
-      }
+      if (!chatId) return;
 
       setIsLoading(true);
       try {
@@ -73,11 +89,15 @@ function App() {
         if (userData.status === 'CONFIRMED') {
           const catData = await apiService.getCategories();
           setCategories(catData);
+          setIsError(false);
+        } else {
+          setIsError(true);
+          setErrorMessage('Profilingiz tasdiqlanmagan. Iltimos, administrator bilan bog\'laning.');
         }
       } catch (err) {
         console.error(err);
         setIsError(true);
-        setErrorMessage('Server bilan bog\'lanishda xatolik yuz berdi yoki foydalanuvchi topilmadi.');
+        setErrorMessage('Foydalanuvchi topilmadi yoki server bilan bog\'lanishda xatolik.');
       } finally {
         setIsLoading(false);
       }
