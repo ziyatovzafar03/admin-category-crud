@@ -19,11 +19,28 @@ function App() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingCategory, setEditingCategory] = useState<Category | null>(null);
 
-  // Extract Chat ID from Hash
-  const chatId = useMemo(() => {
+  // Use state for chatId to make it reactive to hash changes
+  const [chatId, setChatId] = useState<string | null>(() => {
     const hash = window.location.hash;
     const match = hash.match(/chatId=([^&]+)/);
     return match ? match[1] : null;
+  });
+
+  // Handle Hash Redirect & Listener
+  useEffect(() => {
+    const handleHashChange = () => {
+      const hash = window.location.hash;
+      const match = hash.match(/chatId=([^&]+)/);
+      setChatId(match ? match[1] : null);
+    };
+
+    // Redirect if accessing root / or missing chatId
+    if (!window.location.hash || !window.location.hash.includes('chatId=')) {
+      window.location.replace('#chatId=123456789');
+    }
+
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
   }, []);
 
   // Theme Toggler
@@ -39,12 +56,16 @@ function App() {
   useEffect(() => {
     const init = async () => {
       if (!chatId) {
-        setIsError(true);
-        setErrorMessage('URL orqali chatId topilmadi. Iltimos, qayta urinib ko\'ring.');
-        setIsLoading(false);
+        // Only set error if we aren't in the process of redirecting
+        if (window.location.hash.includes('chatId=')) {
+          setIsError(true);
+          setErrorMessage('URL orqali chatId topilmadi. Iltimos, qayta urinib ko\'ring.');
+          setIsLoading(false);
+        }
         return;
       }
 
+      setIsLoading(true);
       try {
         const userData = await apiService.findUserByChatId(chatId);
         setUser(userData);
@@ -56,14 +77,13 @@ function App() {
       } catch (err) {
         console.error(err);
         setIsError(true);
-        setErrorMessage('Server bilan bog\'lanishda xatolik yuz berdi.');
+        setErrorMessage('Server bilan bog\'lanishda xatolik yuz berdi yoki foydalanuvchi topilmadi.');
       } finally {
         setIsLoading(false);
       }
     };
 
     init();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatId]);
 
   // CRUD Handlers
